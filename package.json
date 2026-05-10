@@ -1,0 +1,39 @@
+{
+  "name": "agenda-pebble",
+  "author": "YGalanter",
+  "version": "1.0.0",
+  "keywords": [
+    "pebble-app"
+  ],
+  "private": true,
+  "dependencies": {
+    "@rebble/clay": "^1.0.8"
+  },
+  "pebble": {
+    "displayName": "Agenda",
+    "uuid": "aff199a3-7070-463d-b0fd-2215ee16a014",
+    "sdkVersion": "3",
+    "enableMultiJS": true,
+    "targetPlatforms": [
+      "emery"
+    ],
+    "capabilities": [
+      "location"
+    ],
+    "watchapp": {
+      "watchface": true
+    },
+    "messageKeys": [
+      "FORECAST_TEMPS",
+      "FORECAST_CODES",
+      "CAL_TITLE",
+      "CAL_TIME",
+      "TEMP_UNIT",
+      "REQUEST_DATA",
+      "ICS_URL"
+    ],
+    "resources": {
+      "media": []
+    }
+  }
+}
