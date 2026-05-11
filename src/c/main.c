@@ -32,18 +32,28 @@ static char s_date_buf[32];
 
 static int s_battery_level = 100;
 static bool s_battery_charging = false;
+static bool s_is_day = true;
 
 static GFont s_font_14;
 
 static WeatherIcon wmo_to_icon(int code) {
     if (code <= 1) return ICON_CLEAR;
-    if (code <= 3) return ICON_FEW_CLOUDS;
+    if (code == 2) return ICON_FEW_CLOUDS;
+    if (code == 3) return ICON_CLOUDY;
     if (code <= 48) return ICON_FOG;
     if (code <= 67) return ICON_RAIN;
     if (code <= 77) return ICON_SNOW;
+    if (code <= 82) return ICON_RAIN;
     if (code <= 86) return ICON_SNOW;
     if (code >= 95) return ICON_THUNDERSTORM;
     return ICON_UNKNOWN;
+}
+
+static void draw_moon(GContext *ctx, int cx, int cy) {
+    graphics_context_set_fill_color(ctx, GColorPastelYellow);
+    graphics_fill_circle(ctx, GPoint(cx, cy), 7);
+    graphics_context_set_fill_color(ctx, GColorBlack);
+    graphics_fill_circle(ctx, GPoint(cx + 4, cy - 3), 6);
 }
 
 static void draw_sun(GContext *ctx, int cx, int cy) {
@@ -70,13 +80,15 @@ static void draw_cloud(GContext *ctx, int cx, int cy, GColor color) {
     graphics_fill_rect(ctx, GRect(cx - 9, cy, 18, 5), 2, GCornersAll);
 }
 
-static void draw_icon(GContext *ctx, int cx, int cy, WeatherIcon icon) {
+static void draw_icon(GContext *ctx, int cx, int cy, WeatherIcon icon, bool night) {
     switch (icon) {
         case ICON_CLEAR:
-            draw_sun(ctx, cx, cy);
+            if (night) draw_moon(ctx, cx, cy);
+            else draw_sun(ctx, cx, cy);
             break;
         case ICON_FEW_CLOUDS:
-            draw_sun(ctx, cx - 3, cy - 4);
+            if (night) { draw_moon(ctx, cx - 3, cy - 4); }
+            else { draw_sun(ctx, cx - 3, cy - 4); }
             draw_cloud(ctx, cx + 2, cy + 2, GColorLightGray);
             break;
         case ICON_CLOUDY:
@@ -166,7 +178,7 @@ static void canvas_update_proc(Layer *layer, GContext *ctx) {
             GRect(cx - col_w / 2, 160, col_w, 16),
             GTextOverflowModeTrailingEllipsis, GTextAlignmentCenter, NULL);
 
-        draw_icon(ctx, cx, 190, s_forecast_icons[i]);
+        draw_icon(ctx, cx, 190, s_forecast_icons[i], i == 0 && !s_is_day);
 
         char temp_str[8];
         snprintf(temp_str, sizeof(temp_str), "%d°", s_forecast_temps[i]);
@@ -201,6 +213,11 @@ static void inbox_received_callback(DictionaryIterator *iter, void *context) {
             s_forecast_icons[i] = wmo_to_icon(codes[i]);
         }
         s_has_forecast = true;
+    }
+
+    t = dict_find(iter, MESSAGE_KEY_IS_DAY);
+    if (t) {
+        s_is_day = t->value->int32 != 0;
     }
 
     t = dict_find(iter, MESSAGE_KEY_CAL_TITLE);

@@ -38,7 +38,7 @@ function fetchWeather() {
                 '?latitude=' + pos.coords.latitude +
                 '&longitude=' + pos.coords.longitude +
                 '&daily=temperature_2m_max,weather_code' +
-                '&current=temperature_2m,weather_code' +
+                '&current=temperature_2m,weather_code,is_day' +
                 '&temperature_unit=' + unit +
                 '&timezone=auto&forecast_days=7';
             var xhr = new XMLHttpRequest();
@@ -56,7 +56,8 @@ function fetchWeather() {
                     sendMsg({
                         'FORECAST_TEMPS': temps,
                         'FORECAST_CODES': codes,
-                        'TEMP_UNIT': getTempUnit()
+                        'TEMP_UNIT': getTempUnit(),
+                        'IS_DAY': data.current.is_day ? 1 : 0
                     });
                 } catch (e) {
                     console.log('Weather parse error: ' + e);
