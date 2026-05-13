@@ -33,8 +33,11 @@ static char s_date_buf[32];
 static int s_battery_level = 100;
 static bool s_battery_charging = false;
 static bool s_is_day = true;
+static bool s_leading_zero = true;
 
 static GFont s_font_14;
+
+static void tick_handler(struct tm *tick_time, TimeUnits units_changed);
 
 static WeatherIcon wmo_to_icon(int code) {
     if (code <= 1) return ICON_CLEAR;
@@ -234,6 +237,13 @@ static void inbox_received_callback(DictionaryIterator *iter, void *context) {
         text_layer_set_text(s_cal_time_layer, s_cal_time_buf);
     }
 
+    t = dict_find(iter, MESSAGE_KEY_LEADING_ZERO);
+    if (t) {
+        s_leading_zero = t->value->int32 != 0;
+        time_t now = time(NULL);
+        tick_handler(localtime(&now), MINUTE_UNIT);
+    }
+
     layer_mark_dirty(s_canvas_layer);
 }
 
@@ -253,7 +263,7 @@ static void request_data(void) {
 static void tick_handler(struct tm *tick_time, TimeUnits units_changed) {
     strftime(s_time_buf, sizeof(s_time_buf),
              clock_is_24h_style() ? "%H:%M" : "%I:%M", tick_time);
-    if (!clock_is_24h_style() && s_time_buf[0] == '0') {
+    if (!s_leading_zero && s_time_buf[0] == '0') {
         s_time_buf[0] = ' ';
     }
     text_layer_set_text(s_time_layer, s_time_buf);

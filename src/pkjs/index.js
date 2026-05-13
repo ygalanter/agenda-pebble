@@ -30,6 +30,14 @@ function getTempUnit() {
     return raw === '1' ? 1 : 0;
 }
 
+function getLeadingZero() {
+    return localStorage.getItem('leading_zero') === '1' ? 1 : 0;
+}
+
+function sendSettings() {
+    sendMsg({ 'LEADING_ZERO': getLeadingZero() });
+}
+
 function fetchWeather() {
     var unit = getTempUnit() === 1 ? 'celsius' : 'fahrenheit';
     navigator.geolocation.getCurrentPosition(
@@ -226,12 +234,14 @@ function fetchCalendar() {
 }
 
 Pebble.addEventListener('ready', function () {
+    sendSettings();
     fetchWeather();
     fetchCalendar();
 });
 
 Pebble.addEventListener('appmessage', function (e) {
     if (e.payload['REQUEST_DATA']) {
+        sendSettings();
         fetchWeather();
         fetchCalendar();
     }
@@ -255,9 +265,11 @@ Pebble.addEventListener('webviewclosed', function (e) {
         localStorage.setItem('clay-settings', JSON.stringify(flat));
         localStorage.setItem('temp_unit', flat.TEMP_UNIT ? '1' : '0');
         localStorage.setItem('ics_url', flat.ICS_URL || '');
+        localStorage.setItem('leading_zero', flat.LEADING_ZERO ? '1' : '0');
     } catch (ex) {
         console.log('Settings error: ' + ex);
     }
+    sendSettings();
     fetchWeather();
     fetchCalendar();
 });

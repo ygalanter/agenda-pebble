@@ -31,7 +31,8 @@
       "TEMP_UNIT",
       "REQUEST_DATA",
       "ICS_URL",
-      "IS_DAY"
+      "IS_DAY",
+      "LEADING_ZERO"
     ],
     "resources": {
       "media": []

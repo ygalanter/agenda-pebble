@@ -38,6 +38,21 @@
       }
     ]
   },
+    {
+    "type": "section",
+    "items": [
+      {
+        "type": "heading",
+        "defaultValue": "Appearance"
+      },
+      {
+        "type": "toggle",
+        "messageKey": "LEADING_ZERO",
+        "label": "Add leading zero to hours in single digit times",
+        "defaultValue": false
+      }
+    ]
+  },
   {
     "type": "submit",
     "defaultValue": "Save Settings"
