@@ -30,6 +30,14 @@ function getTempUnit() {
     return raw === '1' ? 1 : 0;
 }
 
+function getLeadingZero() {
+    return localStorage.getItem('leading_zero') === '1' ? 1 : 0;
+}
+
+function sendSettings() {
+    sendMsg({ 'LEADING_ZERO': getLeadingZero() });
+}
+
 function fetchWeather() {
     var unit = getTempUnit() === 1 ? 'celsius' : 'fahrenheit';
     navigator.geolocation.getCurrentPosition(
@@ -56,7 +64,6 @@ function fetchWeather() {
                     sendMsg({
                         'FORECAST_TEMPS': temps,
                         'FORECAST_CODES': codes,
-                        'TEMP_UNIT': getTempUnit(),
                         'IS_DAY': data.current.is_day ? 1 : 0
                     });
                 } catch (e) {
@@ -64,6 +71,7 @@ function fetchWeather() {
                 }
             };
             xhr.onerror = function () { console.log('Weather fetch failed'); };
+            xhr.ontimeout = function () { console.log('Weather fetch timed out'); };
             xhr.timeout = 30000;
             xhr.open('GET', url);
             xhr.send();
@@ -139,7 +147,13 @@ function expandRecurrence(event, after) {
     while (candidate <= maxLookahead && occ < maxCount) {
         occ++;
         if (until && candidate > until) return null;
-        if (candidate > after) {
+        var isFuture = candidate > after;
+        if (!isFuture && event.allDay) {
+            var endOfDay = new Date(candidate);
+            endOfDay.setDate(endOfDay.getDate() + 1);
+            isFuture = endOfDay > after;
+        }
+        if (isFuture) {
             var excluded = false;
             for (var j = 0; j < event.exdates.length; j++) {
                 if (Math.abs(candidate - event.exdates[j]) < 86400000) { excluded = true; break; }
@@ -165,6 +179,10 @@ function findNextEvent(events) {
         if (ev.rrule) {
             var next = expandRecurrence(ev, now);
             if (next) candidates.push({ summary: ev.summary, start: next, allDay: ev.allDay });
+        } else if (ev.allDay) {
+            var endOfDay = new Date(ev.start);
+            endOfDay.setDate(endOfDay.getDate() + 1);
+            if (endOfDay > now) candidates.push(ev);
         } else if (ev.start > now) {
             candidates.push(ev);
         }
@@ -220,18 +238,21 @@ function fetchCalendar() {
         }
     };
     xhr.onerror = function () { sendMsg({ 'CAL_TITLE': 'Calendar unavailable', 'CAL_TIME': '' }); };
+    xhr.ontimeout = function () { sendMsg({ 'CAL_TITLE': 'Calendar timed out', 'CAL_TIME': '' }); };
     xhr.timeout = 30000;
     xhr.open('GET', icsUrl);
     xhr.send();
 }
 
 Pebble.addEventListener('ready', function () {
+    sendSettings();
     fetchWeather();
     fetchCalendar();
 });
 
 Pebble.addEventListener('appmessage', function (e) {
     if (e.payload['REQUEST_DATA']) {
+        sendSettings();
         fetchWeather();
         fetchCalendar();
     }
@@ -255,9 +276,11 @@ Pebble.addEventListener('webviewclosed', function (e) {
         localStorage.setItem('clay-settings', JSON.stringify(flat));
         localStorage.setItem('temp_unit', flat.TEMP_UNIT ? '1' : '0');
         localStorage.setItem('ics_url', flat.ICS_URL || '');
+        localStorage.setItem('leading_zero', flat.LEADING_ZERO ? '1' : '0');
     } catch (ex) {
         console.log('Settings error: ' + ex);
     }
+    sendSettings();
     fetchWeather();
     fetchCalendar();
 });

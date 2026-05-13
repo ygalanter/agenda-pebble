@@ -1,7 +1,7 @@
 {
   "name": "agenda-pebble",
   "author": "YGalanter",
-  "version": "1.1.0",
+  "version": "1.2.0",
   "keywords": [
     "pebble-app"
   ],
@@ -31,7 +31,8 @@
       "TEMP_UNIT",
       "REQUEST_DATA",
       "ICS_URL",
-      "IS_DAY"
+      "IS_DAY",
+      "LEADING_ZERO"
     ],
     "resources": {
       "media": []
