@@ -33,7 +33,7 @@ static char s_date_buf[32];
 static int s_battery_level = 100;
 static bool s_battery_charging = false;
 static bool s_is_day = true;
-static bool s_leading_zero = true;
+static bool s_leading_zero = false;
 
 static GFont s_font_14;
 
