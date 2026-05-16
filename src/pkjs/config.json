@@ -23,13 +23,33 @@
     "items": [
       {
         "type": "heading",
-        "defaultValue": "Calendar"
+        "defaultValue": "Calendars"
       },
       {
         "type": "input",
         "messageKey": "ICS_URL",
-        "label": "Google Calendar ICS URL",
-        "description": "Google Calendar > Settings > Your calendar > Secret address in iCal format",
+        "label": "Calendar 1 ICS URL",
+        "description": "Google Calendar > Settings > Your calendar > Secret address in iCal format. Leave empty to skip.",
+        "defaultValue": "",
+        "attributes": {
+          "placeholder": "https://calendar.google.com/...",
+          "type": "url"
+        }
+      },
+      {
+        "type": "input",
+        "messageKey": "ICS_URL2",
+        "label": "Calendar 2 ICS URL",
+        "defaultValue": "",
+        "attributes": {
+          "placeholder": "https://calendar.google.com/...",
+          "type": "url"
+        }
+      },
+      {
+        "type": "input",
+        "messageKey": "ICS_URL3",
+        "label": "Calendar 3 ICS URL",
         "defaultValue": "",
         "attributes": {
           "placeholder": "https://calendar.google.com/...",
