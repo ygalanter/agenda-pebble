@@ -25,6 +25,16 @@ function getIcsUrl() {
     return raw || '';
 }
 
+function getIcsUrl2() {
+    var raw = localStorage.getItem('ics_url2');
+    return raw || '';
+}
+
+function getIcsUrl3() {
+    var raw = localStorage.getItem('ics_url3');
+    return raw || '';
+}
+
 function getTempUnit() {
     var raw = localStorage.getItem('temp_unit');
     return raw === '1' ? 1 : 0;
@@ -210,38 +220,54 @@ function formatEventTime(date, allDay) {
     return dayStr + ' ' + h + ':' + (m < 10 ? '0' : '') + m + ' ' + ampm;
 }
 
+function parseICSText(text) {
+    var normalized = text.replace(/\r\n[\t ]/g, '').replace(/\r\n/g, '\n').replace(/\r/g, '\n');
+    var events = [];
+    var blocks = normalized.split('BEGIN:VEVENT');
+    for (var i = 1; i < blocks.length; i++) {
+        var ev = parseEvent(blocks[i].split('END:VEVENT')[0]);
+        if (ev) events.push(ev);
+    }
+    return events;
+}
+
 function fetchCalendar() {
-    var icsUrl = getIcsUrl();
-    if (!icsUrl) {
+    var urls = [getIcsUrl(), getIcsUrl2(), getIcsUrl3()].filter(function (u) { return u !== ''; });
+    if (urls.length === 0) {
         sendMsg({ 'CAL_TITLE': 'Set calendar in settings', 'CAL_TIME': '' });
         return;
     }
-    var xhr = new XMLHttpRequest();
-    xhr.onload = function () {
-        try {
-            var text = this.responseText.replace(/\r\n[\t ]/g, '').replace(/\r\n/g, '\n').replace(/\r/g, '\n');
-            var events = [];
-            var blocks = text.split('BEGIN:VEVENT');
-            for (var i = 1; i < blocks.length; i++) {
-                var ev = parseEvent(blocks[i].split('END:VEVENT')[0]);
-                if (ev) events.push(ev);
-            }
-            var next = findNextEvent(events);
-            if (next) {
-                sendMsg({ 'CAL_TITLE': next.summary.substring(0, 63), 'CAL_TIME': formatEventTime(next.start, next.allDay) });
-            } else {
-                sendMsg({ 'CAL_TITLE': 'No upcoming events', 'CAL_TIME': '' });
-            }
-        } catch (e) {
-            console.log('ICS parse error: ' + e);
-            sendMsg({ 'CAL_TITLE': 'Calendar error', 'CAL_TIME': '' });
+    var allEvents = [];
+    var pending = urls.length;
+    function onComplete() {
+        pending--;
+        if (pending > 0) return;
+        var next = findNextEvent(allEvents);
+        if (next) {
+            sendMsg({ 'CAL_TITLE': next.summary.substring(0, 63), 'CAL_TIME': formatEventTime(next.start, next.allDay) });
+        } else {
+            sendMsg({ 'CAL_TITLE': 'No upcoming events', 'CAL_TIME': '' });
         }
-    };
-    xhr.onerror = function () { sendMsg({ 'CAL_TITLE': 'Calendar unavailable', 'CAL_TIME': '' }); };
-    xhr.ontimeout = function () { sendMsg({ 'CAL_TITLE': 'Calendar timed out', 'CAL_TIME': '' }); };
-    xhr.timeout = 30000;
-    xhr.open('GET', icsUrl);
-    xhr.send();
+    }
+    for (var j = 0; j < urls.length; j++) {
+        (function (url) {
+            var xhr = new XMLHttpRequest();
+            xhr.onload = function () {
+                try {
+                    var events = parseICSText(this.responseText);
+                    allEvents = allEvents.concat(events);
+                } catch (e) {
+                    console.log('ICS parse error: ' + e);
+                }
+                onComplete();
+            };
+            xhr.onerror = function () { console.log('Calendar fetch failed: ' + url); onComplete(); };
+            xhr.ontimeout = function () { console.log('Calendar fetch timed out: ' + url); onComplete(); };
+            xhr.timeout = 30000;
+            xhr.open('GET', url);
+            xhr.send();
+        })(urls[j]);
+    }
 }
 
 Pebble.addEventListener('ready', function () {
@@ -276,6 +302,8 @@ Pebble.addEventListener('webviewclosed', function (e) {
         localStorage.setItem('clay-settings', JSON.stringify(flat));
         localStorage.setItem('temp_unit', flat.TEMP_UNIT ? '1' : '0');
         localStorage.setItem('ics_url', flat.ICS_URL || '');
+        localStorage.setItem('ics_url2', flat.ICS_URL2 || '');
+        localStorage.setItem('ics_url3', flat.ICS_URL3 || '');
         localStorage.setItem('leading_zero', flat.LEADING_ZERO ? '1' : '0');
     } catch (ex) {
         console.log('Settings error: ' + ex);
