@@ -197,8 +197,17 @@ function findNextEvent(events) {
             candidates.push(ev);
         }
     }
-    candidates.sort(function (a, b) { return a.start - b.start; });
-    return candidates.length > 0 ? candidates[0] : null;
+    var timed = [];
+    var allDay = [];
+    for (var j = 0; j < candidates.length; j++) {
+        if (candidates[j].allDay) allDay.push(candidates[j]);
+        else timed.push(candidates[j]);
+    }
+    timed.sort(function (a, b) { return a.start - b.start; });
+    allDay.sort(function (a, b) { return a.start - b.start; });
+    if (timed.length > 0) return timed[0];
+    if (allDay.length > 0) return allDay[0];
+    return null;
 }
 
 function formatEventTime(date, allDay) {
