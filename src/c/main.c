@@ -20,6 +20,29 @@ static TextLayer *s_cal_title_layer;
 static TextLayer *s_cal_time_layer;
 static Layer *s_canvas_layer;
 
+// Size-driven layout. The >=200 (emery) branch reproduces the original pixel
+// positions/fonts exactly; the 144x168 branch compresses to fit the smaller
+// screen. Filled once in window_load, read by canvas_update_proc.
+typedef struct {
+    GFont time_font;
+    GFont date_font;
+    GFont cal_title_font;
+    GFont cal_time_font;
+    int time_y, time_h;
+    int date_y, date_h;
+    int cal_title_y, cal_title_h;
+    int cal_time_y, cal_time_h;
+    int cal_margin;
+    int sep1_y, sep2_y;
+    int forecast_top;
+    int day_y, day_h;
+    int icon_cy;
+    int temp_y, temp_h;
+    int loading_y;
+} Layout;
+
+static Layout s_layout;
+
 static int s_forecast_temps[NUM_FORECAST_DAYS];
 static WeatherIcon s_forecast_icons[NUM_FORECAST_DAYS];
 static bool s_has_forecast = false;
@@ -37,6 +60,11 @@ static bool s_leading_zero = false;
 
 static GFont s_font_14;
 
+// Weather-icon scale (percent). 100 = original size on emery; the 144x168
+// platforms shrink the icons so each gets a few px of padding in its column.
+static int s_icon_scale = 100;
+#define ISC(x) ((x) * s_icon_scale / 100)
+
 static void tick_handler(struct tm *tick_time, TimeUnits units_changed);
 
 static WeatherIcon wmo_to_icon(int code) {
@@ -52,87 +80,111 @@ static WeatherIcon wmo_to_icon(int code) {
     return ICON_UNKNOWN;
 }
 
+// All icon primitives draw relative to the (cx, cy) anchor with every offset
+// and radius passed through ISC(), so the whole glyph scales uniformly about
+// its anchor (lets the 144x168 builds shrink icons for column padding).
+
 static void draw_moon(GContext *ctx, int cx, int cy) {
-    graphics_context_set_fill_color(ctx, GColorPastelYellow);
-    graphics_fill_circle(ctx, GPoint(cx, cy), 7);
+    graphics_context_set_fill_color(ctx, PBL_IF_COLOR_ELSE(GColorPastelYellow, GColorWhite));
+    graphics_fill_circle(ctx, GPoint(cx, cy), ISC(7));
     graphics_context_set_fill_color(ctx, GColorBlack);
-    graphics_fill_circle(ctx, GPoint(cx + 4, cy - 3), 6);
+    graphics_fill_circle(ctx, GPoint(cx + ISC(4), cy - ISC(3)), ISC(6));
 }
 
 static void draw_sun(GContext *ctx, int cx, int cy) {
-    graphics_context_set_stroke_color(ctx, GColorChromeYellow);
+    graphics_context_set_stroke_color(ctx, PBL_IF_COLOR_ELSE(GColorChromeYellow, GColorWhite));
     graphics_context_set_stroke_width(ctx, 1);
     for (int i = 0; i < 8; i++) {
         int32_t angle = TRIG_MAX_ANGLE * i / 8;
         GPoint s = GPoint(
-            cx + 8 * sin_lookup(angle) / TRIG_MAX_RATIO,
-            cy - 8 * cos_lookup(angle) / TRIG_MAX_RATIO);
+            cx + ISC(8) * sin_lookup(angle) / TRIG_MAX_RATIO,
+            cy - ISC(8) * cos_lookup(angle) / TRIG_MAX_RATIO);
         GPoint e = GPoint(
-            cx + 10 * sin_lookup(angle) / TRIG_MAX_RATIO,
-            cy - 10 * cos_lookup(angle) / TRIG_MAX_RATIO);
+            cx + ISC(10) * sin_lookup(angle) / TRIG_MAX_RATIO,
+            cy - ISC(10) * cos_lookup(angle) / TRIG_MAX_RATIO);
         graphics_draw_line(ctx, s, e);
     }
-    graphics_context_set_fill_color(ctx, GColorYellow);
-    graphics_fill_circle(ctx, GPoint(cx, cy), 6);
+    graphics_context_set_fill_color(ctx, PBL_IF_COLOR_ELSE(GColorYellow, GColorWhite));
+    graphics_fill_circle(ctx, GPoint(cx, cy), ISC(6));
 }
 
 static void draw_cloud(GContext *ctx, int cx, int cy, GColor color) {
+#if defined(PBL_BW)
+    // On B&W the gray cloud collapses to black and vanishes on the black
+    // background; draw it white so the icon reads.
+    color = GColorWhite;
+#endif
     graphics_context_set_fill_color(ctx, color);
-    graphics_fill_circle(ctx, GPoint(cx - 4, cy - 3), 5);
-    graphics_fill_circle(ctx, GPoint(cx + 4, cy - 4), 4);
-    graphics_fill_rect(ctx, GRect(cx - 9, cy, 18, 5), 2, GCornersAll);
+    graphics_fill_circle(ctx, GPoint(cx - ISC(4), cy - ISC(3)), ISC(5));
+    graphics_fill_circle(ctx, GPoint(cx + ISC(4), cy - ISC(4)), ISC(4));
+    graphics_fill_rect(ctx, GRect(cx - ISC(9), cy, ISC(18), ISC(5)), 2, GCornersAll);
 }
 
 static void draw_icon(GContext *ctx, int cx, int cy, WeatherIcon icon, bool night) {
+    // Vertical center of each icon's bounding box, relative to its anchor, in
+    // unscaled units. Shifting the anchor by -ISC(offset) puts every icon's
+    // middle on the same cy line, so the row stays aligned on all platforms.
+    static const int center_off[ICON_UNKNOWN + 1] = {
+        0,   // ICON_CLEAR (sun/moon already centered)
+        -3,  // ICON_FEW_CLOUDS (sun/moon above + cloud below)
+        -2,  // ICON_CLOUDY
+        1,   // ICON_FOG
+        -2,  // ICON_RAIN
+        -2,  // ICON_SNOW
+        -2,  // ICON_THUNDERSTORM
+        0    // ICON_UNKNOWN
+    };
+    int acy = cy - ISC(center_off[icon]);
+
     switch (icon) {
         case ICON_CLEAR:
-            if (night) draw_moon(ctx, cx, cy);
-            else draw_sun(ctx, cx, cy);
+            if (night) draw_moon(ctx, cx, acy);
+            else draw_sun(ctx, cx, acy);
             break;
         case ICON_FEW_CLOUDS:
-            if (night) { draw_moon(ctx, cx - 3, cy - 4); }
-            else { draw_sun(ctx, cx - 3, cy - 4); }
-            draw_cloud(ctx, cx + 2, cy + 2, GColorLightGray);
+            if (night) { draw_moon(ctx, cx - ISC(3), acy - ISC(4)); }
+            else { draw_sun(ctx, cx - ISC(3), acy - ISC(4)); }
+            draw_cloud(ctx, cx + ISC(2), acy + ISC(2), GColorLightGray);
             break;
         case ICON_CLOUDY:
-            draw_cloud(ctx, cx, cy, GColorLightGray);
+            draw_cloud(ctx, cx, acy, GColorLightGray);
             break;
         case ICON_FOG:
-            graphics_context_set_stroke_color(ctx, GColorLightGray);
+            graphics_context_set_stroke_color(ctx, PBL_IF_COLOR_ELSE(GColorLightGray, GColorWhite));
             graphics_context_set_stroke_width(ctx, 2);
             for (int i = 0; i < 4; i++) {
-                int y = cy - 5 + i * 4;
-                graphics_draw_line(ctx, GPoint(cx - 8, y), GPoint(cx + 8, y));
+                int y = acy - ISC(5) + ISC(i * 4);
+                graphics_draw_line(ctx, GPoint(cx - ISC(8), y), GPoint(cx + ISC(8), y));
             }
             break;
         case ICON_RAIN:
-            draw_cloud(ctx, cx, cy - 4, GColorLightGray);
-            graphics_context_set_stroke_color(ctx, GColorPictonBlue);
+            draw_cloud(ctx, cx, acy - ISC(4), GColorLightGray);
+            graphics_context_set_stroke_color(ctx, PBL_IF_COLOR_ELSE(GColorPictonBlue, GColorWhite));
             graphics_context_set_stroke_width(ctx, 1);
-            graphics_draw_line(ctx, GPoint(cx - 5, cy + 4), GPoint(cx - 6, cy + 8));
-            graphics_draw_line(ctx, GPoint(cx, cy + 5), GPoint(cx - 1, cy + 9));
-            graphics_draw_line(ctx, GPoint(cx + 5, cy + 4), GPoint(cx + 4, cy + 8));
+            graphics_draw_line(ctx, GPoint(cx - ISC(5), acy + ISC(4)), GPoint(cx - ISC(6), acy + ISC(8)));
+            graphics_draw_line(ctx, GPoint(cx, acy + ISC(5)), GPoint(cx - ISC(1), acy + ISC(9)));
+            graphics_draw_line(ctx, GPoint(cx + ISC(5), acy + ISC(4)), GPoint(cx + ISC(4), acy + ISC(8)));
             break;
         case ICON_SNOW:
-            draw_cloud(ctx, cx, cy - 4, GColorLightGray);
+            draw_cloud(ctx, cx, acy - ISC(4), GColorLightGray);
             graphics_context_set_fill_color(ctx, GColorWhite);
-            graphics_fill_circle(ctx, GPoint(cx - 5, cy + 5), 2);
-            graphics_fill_circle(ctx, GPoint(cx + 1, cy + 7), 2);
-            graphics_fill_circle(ctx, GPoint(cx + 6, cy + 5), 2);
+            graphics_fill_circle(ctx, GPoint(cx - ISC(5), acy + ISC(5)), ISC(2));
+            graphics_fill_circle(ctx, GPoint(cx + ISC(1), acy + ISC(7)), ISC(2));
+            graphics_fill_circle(ctx, GPoint(cx + ISC(6), acy + ISC(5)), ISC(2));
             break;
         case ICON_THUNDERSTORM:
-            draw_cloud(ctx, cx, cy - 4, GColorDarkGray);
-            graphics_context_set_stroke_color(ctx, GColorYellow);
+            draw_cloud(ctx, cx, acy - ISC(4), GColorDarkGray);
+            graphics_context_set_stroke_color(ctx, PBL_IF_COLOR_ELSE(GColorYellow, GColorWhite));
             graphics_context_set_stroke_width(ctx, 2);
-            graphics_draw_line(ctx, GPoint(cx + 1, cy + 2), GPoint(cx - 2, cy + 5));
-            graphics_draw_line(ctx, GPoint(cx - 2, cy + 5), GPoint(cx + 2, cy + 5));
-            graphics_draw_line(ctx, GPoint(cx + 2, cy + 5), GPoint(cx - 1, cy + 9));
+            graphics_draw_line(ctx, GPoint(cx + ISC(1), acy + ISC(2)), GPoint(cx - ISC(2), acy + ISC(5)));
+            graphics_draw_line(ctx, GPoint(cx - ISC(2), acy + ISC(5)), GPoint(cx + ISC(2), acy + ISC(5)));
+            graphics_draw_line(ctx, GPoint(cx + ISC(2), acy + ISC(5)), GPoint(cx - ISC(1), acy + ISC(9)));
             break;
         case ICON_UNKNOWN:
-            graphics_context_set_stroke_color(ctx, GColorDarkGray);
+            graphics_context_set_stroke_color(ctx, PBL_IF_COLOR_ELSE(GColorDarkGray, GColorWhite));
             graphics_context_set_stroke_width(ctx, 1);
-            graphics_draw_line(ctx, GPoint(cx - 5, cy - 5), GPoint(cx + 5, cy + 5));
-            graphics_draw_line(ctx, GPoint(cx + 5, cy - 5), GPoint(cx - 5, cy + 5));
+            graphics_draw_line(ctx, GPoint(cx - ISC(5), acy - ISC(5)), GPoint(cx + ISC(5), acy + ISC(5)));
+            graphics_draw_line(ctx, GPoint(cx + ISC(5), acy - ISC(5)), GPoint(cx - ISC(5), acy + ISC(5)));
             break;
     }
 }
@@ -142,21 +194,28 @@ static void canvas_update_proc(Layer *layer, GContext *ctx) {
     int w = bounds.size.w;
 
     int bar_w = w * s_battery_level / 100;
+#if defined(PBL_COLOR)
     GColor bar_color = s_battery_charging ? GColorGreen :
                        (s_battery_level <= 20 ? GColorRed :
                         s_battery_level <= 40 ? GColorChromeYellow : GColorGreen);
+#else
+    // The thin level-tinted bar reduces to black on B&W and disappears on the
+    // black background; draw it white (level is still encoded by width).
+    GColor bar_color = GColorWhite;
+#endif
     graphics_context_set_fill_color(ctx, bar_color);
     graphics_fill_rect(ctx, GRect(0, 0, bar_w, 3), 0, GCornerNone);
 
-    graphics_context_set_stroke_color(ctx, GColorDarkGray);
+    // DarkGray separators map to black and vanish on B&W; draw them white there.
+    graphics_context_set_stroke_color(ctx, PBL_IF_COLOR_ELSE(GColorDarkGray, GColorWhite));
     graphics_context_set_stroke_width(ctx, 1);
-    graphics_draw_line(ctx, GPoint(10, 104), GPoint(w - 10, 104));
-    graphics_draw_line(ctx, GPoint(10, 156), GPoint(w - 10, 156));
+    graphics_draw_line(ctx, GPoint(10, s_layout.sep1_y), GPoint(w - 10, s_layout.sep1_y));
+    graphics_draw_line(ctx, GPoint(10, s_layout.sep2_y), GPoint(w - 10, s_layout.sep2_y));
 
     if (!s_has_forecast) {
-        graphics_context_set_text_color(ctx, GColorDarkGray);
+        graphics_context_set_text_color(ctx, PBL_IF_COLOR_ELSE(GColorDarkGray, GColorLightGray));
         graphics_draw_text(ctx, "Loading weather...", s_font_14,
-            GRect(0, 180, w, 20), GTextOverflowModeTrailingEllipsis,
+            GRect(0, s_layout.loading_y, w, 20), GTextOverflowModeTrailingEllipsis,
             GTextAlignmentCenter, NULL);
         return;
     }
@@ -172,22 +231,32 @@ static void canvas_update_proc(Layer *layer, GContext *ctx) {
         int day_idx = (today_wday + i) % 7;
 
         if (i == 0) {
+#if defined(PBL_COLOR)
             graphics_context_set_fill_color(ctx, GColorDarkGreen);
-            graphics_fill_rect(ctx, GRect(0, 157, col_w, bounds.size.h - 157), 0, GCornerNone);
+            graphics_fill_rect(ctx, GRect(0, s_layout.forecast_top, col_w,
+                bounds.size.h - s_layout.forecast_top), 0, GCornerNone);
+#else
+            // DarkGreen fill collapses to black on B&W; mark today with a white
+            // outline instead so the white glyphs/icon inside still read.
+            graphics_context_set_stroke_color(ctx, GColorWhite);
+            graphics_context_set_stroke_width(ctx, 1);
+            graphics_draw_rect(ctx, GRect(0, s_layout.forecast_top, col_w,
+                bounds.size.h - s_layout.forecast_top));
+#endif
         }
 
         graphics_context_set_text_color(ctx, i == 0 ? GColorWhite : GColorLightGray);
         graphics_draw_text(ctx, days[day_idx], s_font_14,
-            GRect(cx - col_w / 2, 160, col_w, 16),
+            GRect(cx - col_w / 2, s_layout.day_y, col_w, s_layout.day_h),
             GTextOverflowModeTrailingEllipsis, GTextAlignmentCenter, NULL);
 
-        draw_icon(ctx, cx, 190, s_forecast_icons[i], i == 0 && !s_is_day);
+        draw_icon(ctx, cx, s_layout.icon_cy, s_forecast_icons[i], i == 0 && !s_is_day);
 
         char temp_str[8];
         snprintf(temp_str, sizeof(temp_str), "%d°", s_forecast_temps[i]);
         graphics_context_set_text_color(ctx, GColorWhite);
         graphics_draw_text(ctx, temp_str, s_font_14,
-            GRect(cx - col_w / 2, 206, col_w, 16),
+            GRect(cx - col_w / 2, s_layout.temp_y, col_w, s_layout.temp_h),
             GTextOverflowModeTrailingEllipsis, GTextAlignmentCenter, NULL);
     }
 }
@@ -284,10 +353,57 @@ static void battery_handler(BatteryChargeState charge) {
     layer_mark_dirty(s_canvas_layer);
 }
 
+static void init_layout(void) {
+    // Compile-time branch: LECO_60 glyphs exceed the 256B max-glyph-size on the
+    // 144x168 platforms, so FONT_KEY_LECO_60_NUMBERS_AM_PM only exists on emery.
+    // Selecting by PBL_DISPLAY_WIDTH keeps the unavailable constant out of the
+    // small-platform builds entirely.
+#if PBL_DISPLAY_WIDTH >= 200
+    // emery (200x228) — original sizes.
+    s_icon_scale = 100;
+    s_layout.time_font      = fonts_get_system_font(FONT_KEY_LECO_60_NUMBERS_AM_PM);
+    s_layout.date_font      = fonts_get_system_font(FONT_KEY_GOTHIC_24_BOLD);
+    s_layout.cal_title_font = fonts_get_system_font(FONT_KEY_GOTHIC_18_BOLD);
+    s_layout.cal_time_font  = fonts_get_system_font(FONT_KEY_GOTHIC_18);
+    s_layout.time_y = 2;        s_layout.time_h = 70;
+    s_layout.date_y = 72;       s_layout.date_h = 28;
+    s_layout.cal_title_y = 108; s_layout.cal_title_h = 22;
+    s_layout.cal_time_y = 130;  s_layout.cal_time_h = 22;
+    s_layout.cal_margin = 8;
+    s_layout.sep1_y = 104;      s_layout.sep2_y = 156;
+    s_layout.forecast_top = 157;
+    s_layout.day_y = 160;       s_layout.day_h = 16;
+    s_layout.icon_cy = 190;
+    s_layout.temp_y = 206;      s_layout.temp_h = 16;
+    s_layout.loading_y = 180;
+#else
+    // basalt/diorite/flint/aplite (144x168) — compressed to fit.
+    // Shrink icons to ~80% so each gets a couple px of padding in its 20px column.
+    s_icon_scale = 80;
+    s_layout.time_font      = fonts_get_system_font(FONT_KEY_LECO_42_NUMBERS);
+    s_layout.date_font      = fonts_get_system_font(FONT_KEY_GOTHIC_18_BOLD);
+    s_layout.cal_title_font = fonts_get_system_font(FONT_KEY_GOTHIC_18_BOLD);
+    s_layout.cal_time_font  = fonts_get_system_font(FONT_KEY_GOTHIC_14);
+    s_layout.time_y = 2;        s_layout.time_h = 46;
+    s_layout.date_y = 48;       s_layout.date_h = 20;
+    s_layout.cal_title_y = 72;  s_layout.cal_title_h = 20;
+    s_layout.cal_time_y = 91;   s_layout.cal_time_h = 18;
+    s_layout.cal_margin = 5;
+    s_layout.sep1_y = 70;       s_layout.sep2_y = 112;
+    s_layout.forecast_top = 113;
+    s_layout.day_y = 114;       s_layout.day_h = 14;
+    s_layout.icon_cy = 140;
+    s_layout.temp_y = 150;      s_layout.temp_h = 16;
+    s_layout.loading_y = 128;
+#endif
+}
+
 static void window_load(Window *window) {
     Layer *root = window_get_root_layer(window);
     GRect bounds = layer_get_bounds(root);
     int w = bounds.size.w;
+
+    init_layout();
 
     s_font_14 = fonts_get_system_font(FONT_KEY_GOTHIC_14);
 
@@ -295,38 +411,39 @@ static void window_load(Window *window) {
     layer_set_update_proc(s_canvas_layer, canvas_update_proc);
     layer_add_child(root, s_canvas_layer);
 
-    s_time_layer = text_layer_create(GRect(0, 2, w, 70));
+    s_time_layer = text_layer_create(GRect(0, s_layout.time_y, w, s_layout.time_h));
     text_layer_set_background_color(s_time_layer, GColorClear);
     text_layer_set_text_color(s_time_layer, GColorWhite);
-    text_layer_set_font(s_time_layer,
-        fonts_get_system_font(FONT_KEY_LECO_60_NUMBERS_AM_PM));
+    text_layer_set_font(s_time_layer, s_layout.time_font);
     text_layer_set_text_alignment(s_time_layer, GTextAlignmentCenter);
     layer_add_child(root, text_layer_get_layer(s_time_layer));
 
-    s_date_layer = text_layer_create(GRect(0, 72, w, 28));
+    s_date_layer = text_layer_create(GRect(0, s_layout.date_y, w, s_layout.date_h));
     text_layer_set_background_color(s_date_layer, GColorClear);
-    text_layer_set_text_color(s_date_layer, GColorCadetBlue);
-    text_layer_set_font(s_date_layer,
-        fonts_get_system_font(FONT_KEY_GOTHIC_24_BOLD));
+    // CadetBlue collapses on B&W; use white there so the date stays visible.
+    text_layer_set_text_color(s_date_layer, PBL_IF_COLOR_ELSE(GColorCadetBlue, GColorWhite));
+    text_layer_set_font(s_date_layer, s_layout.date_font);
     text_layer_set_text_alignment(s_date_layer, GTextAlignmentCenter);
     layer_add_child(root, text_layer_get_layer(s_date_layer));
 
-    s_cal_title_layer = text_layer_create(GRect(8, 108, w - 16, 22));
+    s_cal_title_layer = text_layer_create(
+        GRect(s_layout.cal_margin, s_layout.cal_title_y,
+              w - 2 * s_layout.cal_margin, s_layout.cal_title_h));
     text_layer_set_background_color(s_cal_title_layer, GColorClear);
-    text_layer_set_text_color(s_cal_title_layer, GColorGreen);
-    text_layer_set_font(s_cal_title_layer,
-        fonts_get_system_font(FONT_KEY_GOTHIC_18_BOLD));
+    text_layer_set_text_color(s_cal_title_layer, PBL_IF_COLOR_ELSE(GColorGreen, GColorWhite));
+    text_layer_set_font(s_cal_title_layer, s_layout.cal_title_font);
     text_layer_set_text_alignment(s_cal_title_layer, GTextAlignmentLeft);
     text_layer_set_overflow_mode(s_cal_title_layer,
         GTextOverflowModeTrailingEllipsis);
     text_layer_set_text(s_cal_title_layer, "Loading calendar...");
     layer_add_child(root, text_layer_get_layer(s_cal_title_layer));
 
-    s_cal_time_layer = text_layer_create(GRect(8, 130, w - 16, 22));
+    s_cal_time_layer = text_layer_create(
+        GRect(s_layout.cal_margin, s_layout.cal_time_y,
+              w - 2 * s_layout.cal_margin, s_layout.cal_time_h));
     text_layer_set_background_color(s_cal_time_layer, GColorClear);
     text_layer_set_text_color(s_cal_time_layer, GColorLightGray);
-    text_layer_set_font(s_cal_time_layer,
-        fonts_get_system_font(FONT_KEY_GOTHIC_18));
+    text_layer_set_font(s_cal_time_layer, s_layout.cal_time_font);
     text_layer_set_text_alignment(s_cal_time_layer, GTextAlignmentLeft);
     text_layer_set_overflow_mode(s_cal_time_layer,
         GTextOverflowModeTrailingEllipsis);
