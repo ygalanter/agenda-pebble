@@ -1,7 +1,7 @@
 {
   "name": "agenda-pebble",
   "author": "YGalanter",
-  "version": "1.3.0",
+  "version": "1.4.0",
   "keywords": [
     "pebble-app"
   ],
@@ -15,7 +15,11 @@
     "sdkVersion": "3",
     "enableMultiJS": true,
     "targetPlatforms": [
-      "emery"
+      "emery",
+      "basalt",
+      "diorite",
+      "flint",
+      "aplite"
     ],
     "capabilities": [
       "location"
