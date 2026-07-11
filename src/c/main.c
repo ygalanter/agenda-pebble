@@ -58,6 +58,46 @@ static bool s_battery_charging = false;
 static bool s_is_day = true;
 static bool s_leading_zero = false;
 
+// User-configurable colors (Clay). Defaults reproduce the original design.
+// Persisted so a reboot shows the right colors before pkjs re-sends settings.
+#define PERSIST_COLOR_BG   1
+#define PERSIST_COLOR_TIME 2
+#define PERSIST_COLOR_DATE 3
+#define PERSIST_COLOR_CAL  4
+
+static GColor s_color_bg;
+static GColor s_color_time;
+static GColor s_color_date;
+static GColor s_color_cal;
+
+// Derived contrast palette, recomputed in apply_colors(). Everything that
+// isn't user-configurable (temps, separators, icons on B&W, ...) draws in
+// these so it stays visible on both light and dark backgrounds.
+static GColor s_fg;   // White on dark bg, Black on light bg
+static GColor s_dim;  // LightGray on dark bg, DarkGray on light bg
+static GColor s_sep;  // subtle separator/loading tone (color); s_fg on B&W
+
+// Perceptual-ish luminance (0..30) over the 2-bit channels, so bright hues
+// like pure green or yellow count as light and deep blue/red as dark.
+static int color_luminance(GColor c) {
+    GColor8 c8 = c;
+    return 3 * c8.r + 6 * c8.g + c8.b;
+}
+
+static bool bg_is_dark(void) {
+    return color_luminance(s_color_bg) < 15;
+}
+
+// Clay only offers black/white on B&W watches, but clamp anyway so defaults
+// or stale settings can never yield an invisible mid-tone.
+static GColor color_from_hex(int32_t hex) {
+    GColor c = GColorFromHEX(hex);
+#if defined(PBL_BW)
+    c = color_luminance(c) >= 15 ? GColorWhite : GColorBlack;
+#endif
+    return c;
+}
+
 static GFont s_font_14;
 
 // Weather-icon scale (percent). 100 = original size on emery; the 144x168
@@ -84,15 +124,27 @@ static WeatherIcon wmo_to_icon(int code) {
 // and radius passed through ISC(), so the whole glyph scales uniformly about
 // its anchor (lets the 144x168 builds shrink icons for column padding).
 
+// Each icon color is a (dark-bg, light-bg) pair so the glyphs stay visible on
+// any user-chosen background; carve-out shapes erase with s_color_bg itself.
+// On B&W everything collapses to the contrast foreground.
+static GColor icon_color(GColor on_dark, GColor on_light) {
+#if defined(PBL_BW)
+    (void)on_dark; (void)on_light;
+    return s_fg;
+#else
+    return bg_is_dark() ? on_dark : on_light;
+#endif
+}
+
 static void draw_moon(GContext *ctx, int cx, int cy) {
-    graphics_context_set_fill_color(ctx, PBL_IF_COLOR_ELSE(GColorPastelYellow, GColorWhite));
+    graphics_context_set_fill_color(ctx, icon_color(GColorPastelYellow, GColorChromeYellow));
     graphics_fill_circle(ctx, GPoint(cx, cy), ISC(7));
-    graphics_context_set_fill_color(ctx, GColorBlack);
+    graphics_context_set_fill_color(ctx, s_color_bg);
     graphics_fill_circle(ctx, GPoint(cx + ISC(4), cy - ISC(3)), ISC(6));
 }
 
 static void draw_sun(GContext *ctx, int cx, int cy) {
-    graphics_context_set_stroke_color(ctx, PBL_IF_COLOR_ELSE(GColorChromeYellow, GColorWhite));
+    graphics_context_set_stroke_color(ctx, icon_color(GColorChromeYellow, GColorOrange));
     graphics_context_set_stroke_width(ctx, 1);
     for (int i = 0; i < 8; i++) {
         int32_t angle = TRIG_MAX_ANGLE * i / 8;
@@ -104,16 +156,11 @@ static void draw_sun(GContext *ctx, int cx, int cy) {
             cy - ISC(10) * cos_lookup(angle) / TRIG_MAX_RATIO);
         graphics_draw_line(ctx, s, e);
     }
-    graphics_context_set_fill_color(ctx, PBL_IF_COLOR_ELSE(GColorYellow, GColorWhite));
+    graphics_context_set_fill_color(ctx, icon_color(GColorYellow, GColorChromeYellow));
     graphics_fill_circle(ctx, GPoint(cx, cy), ISC(6));
 }
 
 static void draw_cloud(GContext *ctx, int cx, int cy, GColor color) {
-#if defined(PBL_BW)
-    // On B&W the gray cloud collapses to black and vanishes on the black
-    // background; draw it white so the icon reads.
-    color = GColorWhite;
-#endif
     graphics_context_set_fill_color(ctx, color);
     graphics_fill_circle(ctx, GPoint(cx - ISC(4), cy - ISC(3)), ISC(5));
     graphics_fill_circle(ctx, GPoint(cx + ISC(4), cy - ISC(4)), ISC(4));
@@ -144,13 +191,13 @@ static void draw_icon(GContext *ctx, int cx, int cy, WeatherIcon icon, bool nigh
         case ICON_FEW_CLOUDS:
             if (night) { draw_moon(ctx, cx - ISC(3), acy - ISC(4)); }
             else { draw_sun(ctx, cx - ISC(3), acy - ISC(4)); }
-            draw_cloud(ctx, cx + ISC(2), acy + ISC(2), GColorLightGray);
+            draw_cloud(ctx, cx + ISC(2), acy + ISC(2), icon_color(GColorLightGray, GColorDarkGray));
             break;
         case ICON_CLOUDY:
-            draw_cloud(ctx, cx, acy, GColorLightGray);
+            draw_cloud(ctx, cx, acy, icon_color(GColorLightGray, GColorDarkGray));
             break;
         case ICON_FOG:
-            graphics_context_set_stroke_color(ctx, PBL_IF_COLOR_ELSE(GColorLightGray, GColorWhite));
+            graphics_context_set_stroke_color(ctx, icon_color(GColorLightGray, GColorDarkGray));
             graphics_context_set_stroke_width(ctx, 2);
             for (int i = 0; i < 4; i++) {
                 int y = acy - ISC(5) + ISC(i * 4);
@@ -158,30 +205,30 @@ static void draw_icon(GContext *ctx, int cx, int cy, WeatherIcon icon, bool nigh
             }
             break;
         case ICON_RAIN:
-            draw_cloud(ctx, cx, acy - ISC(4), GColorLightGray);
-            graphics_context_set_stroke_color(ctx, PBL_IF_COLOR_ELSE(GColorPictonBlue, GColorWhite));
+            draw_cloud(ctx, cx, acy - ISC(4), icon_color(GColorLightGray, GColorDarkGray));
+            graphics_context_set_stroke_color(ctx, icon_color(GColorPictonBlue, GColorBlue));
             graphics_context_set_stroke_width(ctx, 1);
             graphics_draw_line(ctx, GPoint(cx - ISC(5), acy + ISC(4)), GPoint(cx - ISC(6), acy + ISC(8)));
             graphics_draw_line(ctx, GPoint(cx, acy + ISC(5)), GPoint(cx - ISC(1), acy + ISC(9)));
             graphics_draw_line(ctx, GPoint(cx + ISC(5), acy + ISC(4)), GPoint(cx + ISC(4), acy + ISC(8)));
             break;
         case ICON_SNOW:
-            draw_cloud(ctx, cx, acy - ISC(4), GColorLightGray);
-            graphics_context_set_fill_color(ctx, GColorWhite);
+            draw_cloud(ctx, cx, acy - ISC(4), icon_color(GColorLightGray, GColorDarkGray));
+            graphics_context_set_fill_color(ctx, icon_color(GColorWhite, GColorDarkGray));
             graphics_fill_circle(ctx, GPoint(cx - ISC(5), acy + ISC(5)), ISC(2));
             graphics_fill_circle(ctx, GPoint(cx + ISC(1), acy + ISC(7)), ISC(2));
             graphics_fill_circle(ctx, GPoint(cx + ISC(6), acy + ISC(5)), ISC(2));
             break;
         case ICON_THUNDERSTORM:
-            draw_cloud(ctx, cx, acy - ISC(4), GColorDarkGray);
-            graphics_context_set_stroke_color(ctx, PBL_IF_COLOR_ELSE(GColorYellow, GColorWhite));
+            draw_cloud(ctx, cx, acy - ISC(4), icon_color(GColorDarkGray, GColorBlack));
+            graphics_context_set_stroke_color(ctx, icon_color(GColorYellow, GColorOrange));
             graphics_context_set_stroke_width(ctx, 2);
             graphics_draw_line(ctx, GPoint(cx + ISC(1), acy + ISC(2)), GPoint(cx - ISC(2), acy + ISC(5)));
             graphics_draw_line(ctx, GPoint(cx - ISC(2), acy + ISC(5)), GPoint(cx + ISC(2), acy + ISC(5)));
             graphics_draw_line(ctx, GPoint(cx + ISC(2), acy + ISC(5)), GPoint(cx - ISC(1), acy + ISC(9)));
             break;
         case ICON_UNKNOWN:
-            graphics_context_set_stroke_color(ctx, PBL_IF_COLOR_ELSE(GColorDarkGray, GColorWhite));
+            graphics_context_set_stroke_color(ctx, icon_color(GColorDarkGray, GColorDarkGray));
             graphics_context_set_stroke_width(ctx, 1);
             graphics_draw_line(ctx, GPoint(cx - ISC(5), acy - ISC(5)), GPoint(cx + ISC(5), acy + ISC(5)));
             graphics_draw_line(ctx, GPoint(cx + ISC(5), acy - ISC(5)), GPoint(cx - ISC(5), acy + ISC(5)));
@@ -200,20 +247,19 @@ static void canvas_update_proc(Layer *layer, GContext *ctx) {
                         s_battery_level <= 40 ? GColorChromeYellow : GColorGreen);
 #else
     // The thin level-tinted bar reduces to black on B&W and disappears on the
-    // black background; draw it white (level is still encoded by width).
-    GColor bar_color = GColorWhite;
+    // background; draw it in the contrast fg (level is still encoded by width).
+    GColor bar_color = s_fg;
 #endif
     graphics_context_set_fill_color(ctx, bar_color);
     graphics_fill_rect(ctx, GRect(0, 0, bar_w, 3), 0, GCornerNone);
 
-    // DarkGray separators map to black and vanish on B&W; draw them white there.
-    graphics_context_set_stroke_color(ctx, PBL_IF_COLOR_ELSE(GColorDarkGray, GColorWhite));
+    graphics_context_set_stroke_color(ctx, s_sep);
     graphics_context_set_stroke_width(ctx, 1);
     graphics_draw_line(ctx, GPoint(10, s_layout.sep1_y), GPoint(w - 10, s_layout.sep1_y));
     graphics_draw_line(ctx, GPoint(10, s_layout.sep2_y), GPoint(w - 10, s_layout.sep2_y));
 
     if (!s_has_forecast) {
-        graphics_context_set_text_color(ctx, PBL_IF_COLOR_ELSE(GColorDarkGray, GColorLightGray));
+        graphics_context_set_text_color(ctx, s_sep);
         graphics_draw_text(ctx, "Loading weather...", s_font_14,
             GRect(0, s_layout.loading_y, w, 20), GTextOverflowModeTrailingEllipsis,
             GTextAlignmentCenter, NULL);
@@ -236,16 +282,19 @@ static void canvas_update_proc(Layer *layer, GContext *ctx) {
             graphics_fill_rect(ctx, GRect(0, s_layout.forecast_top, col_w,
                 bounds.size.h - s_layout.forecast_top), 0, GCornerNone);
 #else
-            // DarkGreen fill collapses to black on B&W; mark today with a white
-            // outline instead so the white glyphs/icon inside still read.
-            graphics_context_set_stroke_color(ctx, GColorWhite);
+            // DarkGreen fill collapses to black on B&W; mark today with a
+            // contrast outline instead so the glyphs/icon inside still read.
+            graphics_context_set_stroke_color(ctx, s_fg);
             graphics_context_set_stroke_width(ctx, 1);
             graphics_draw_rect(ctx, GRect(0, s_layout.forecast_top, col_w,
                 bounds.size.h - s_layout.forecast_top));
 #endif
         }
 
-        graphics_context_set_text_color(ctx, i == 0 ? GColorWhite : GColorLightGray);
+        // Today's label sits on the DarkGreen fill on color (white reads on it
+        // regardless of bg); everywhere else use the bg-contrast palette.
+        graphics_context_set_text_color(ctx,
+            i == 0 ? PBL_IF_COLOR_ELSE(GColorWhite, s_fg) : s_dim);
         graphics_draw_text(ctx, days[day_idx], s_font_14,
             GRect(cx - col_w / 2, s_layout.day_y, col_w, s_layout.day_h),
             GTextOverflowModeTrailingEllipsis, GTextAlignmentCenter, NULL);
@@ -254,11 +303,28 @@ static void canvas_update_proc(Layer *layer, GContext *ctx) {
 
         char temp_str[8];
         snprintf(temp_str, sizeof(temp_str), "%d°", s_forecast_temps[i]);
-        graphics_context_set_text_color(ctx, GColorWhite);
+        graphics_context_set_text_color(ctx,
+            i == 0 ? PBL_IF_COLOR_ELSE(GColorWhite, s_fg) : s_fg);
         graphics_draw_text(ctx, temp_str, s_font_14,
             GRect(cx - col_w / 2, s_layout.temp_y, col_w, s_layout.temp_h),
             GTextOverflowModeTrailingEllipsis, GTextAlignmentCenter, NULL);
     }
+}
+
+// Recomputes the derived contrast palette and pushes the configured colors to
+// the window and text layers. Called once from window_load and again whenever
+// a COLOR_* setting arrives over AppMessage.
+static void apply_colors(void) {
+    s_fg  = bg_is_dark() ? GColorWhite : GColorBlack;
+    s_dim = bg_is_dark() ? GColorLightGray : GColorDarkGray;
+    s_sep = PBL_IF_COLOR_ELSE(bg_is_dark() ? GColorDarkGray : GColorLightGray, s_fg);
+
+    window_set_background_color(s_main_window, s_color_bg);
+    text_layer_set_text_color(s_time_layer, s_color_time);
+    text_layer_set_text_color(s_date_layer, s_color_date);
+    text_layer_set_text_color(s_cal_title_layer, s_color_cal);
+    text_layer_set_text_color(s_cal_time_layer, s_dim);
+    layer_mark_dirty(s_canvas_layer);
 }
 
 static void parse_int_csv(const char *csv, int *out, int max_count) {
@@ -311,6 +377,35 @@ static void inbox_received_callback(DictionaryIterator *iter, void *context) {
         s_leading_zero = t->value->int32 != 0;
         time_t now = time(NULL);
         tick_handler(localtime(&now), MINUTE_UNIT);
+    }
+
+    bool colors_changed = false;
+    t = dict_find(iter, MESSAGE_KEY_COLOR_BG);
+    if (t) {
+        s_color_bg = color_from_hex(t->value->int32);
+        persist_write_int(PERSIST_COLOR_BG, t->value->int32);
+        colors_changed = true;
+    }
+    t = dict_find(iter, MESSAGE_KEY_COLOR_TIME);
+    if (t) {
+        s_color_time = color_from_hex(t->value->int32);
+        persist_write_int(PERSIST_COLOR_TIME, t->value->int32);
+        colors_changed = true;
+    }
+    t = dict_find(iter, MESSAGE_KEY_COLOR_DATE);
+    if (t) {
+        s_color_date = color_from_hex(t->value->int32);
+        persist_write_int(PERSIST_COLOR_DATE, t->value->int32);
+        colors_changed = true;
+    }
+    t = dict_find(iter, MESSAGE_KEY_COLOR_CAL);
+    if (t) {
+        s_color_cal = color_from_hex(t->value->int32);
+        persist_write_int(PERSIST_COLOR_CAL, t->value->int32);
+        colors_changed = true;
+    }
+    if (colors_changed) {
+        apply_colors();
     }
 
     layer_mark_dirty(s_canvas_layer);
@@ -413,15 +508,12 @@ static void window_load(Window *window) {
 
     s_time_layer = text_layer_create(GRect(0, s_layout.time_y, w, s_layout.time_h));
     text_layer_set_background_color(s_time_layer, GColorClear);
-    text_layer_set_text_color(s_time_layer, GColorWhite);
     text_layer_set_font(s_time_layer, s_layout.time_font);
     text_layer_set_text_alignment(s_time_layer, GTextAlignmentCenter);
     layer_add_child(root, text_layer_get_layer(s_time_layer));
 
     s_date_layer = text_layer_create(GRect(0, s_layout.date_y, w, s_layout.date_h));
     text_layer_set_background_color(s_date_layer, GColorClear);
-    // CadetBlue collapses on B&W; use white there so the date stays visible.
-    text_layer_set_text_color(s_date_layer, PBL_IF_COLOR_ELSE(GColorCadetBlue, GColorWhite));
     text_layer_set_font(s_date_layer, s_layout.date_font);
     text_layer_set_text_alignment(s_date_layer, GTextAlignmentCenter);
     layer_add_child(root, text_layer_get_layer(s_date_layer));
@@ -430,7 +522,6 @@ static void window_load(Window *window) {
         GRect(s_layout.cal_margin, s_layout.cal_title_y,
               w - 2 * s_layout.cal_margin, s_layout.cal_title_h));
     text_layer_set_background_color(s_cal_title_layer, GColorClear);
-    text_layer_set_text_color(s_cal_title_layer, PBL_IF_COLOR_ELSE(GColorGreen, GColorWhite));
     text_layer_set_font(s_cal_title_layer, s_layout.cal_title_font);
     text_layer_set_text_alignment(s_cal_title_layer, GTextAlignmentLeft);
     text_layer_set_overflow_mode(s_cal_title_layer,
@@ -442,12 +533,13 @@ static void window_load(Window *window) {
         GRect(s_layout.cal_margin, s_layout.cal_time_y,
               w - 2 * s_layout.cal_margin, s_layout.cal_time_h));
     text_layer_set_background_color(s_cal_time_layer, GColorClear);
-    text_layer_set_text_color(s_cal_time_layer, GColorLightGray);
     text_layer_set_font(s_cal_time_layer, s_layout.cal_time_font);
     text_layer_set_text_alignment(s_cal_time_layer, GTextAlignmentLeft);
     text_layer_set_overflow_mode(s_cal_time_layer,
         GTextOverflowModeTrailingEllipsis);
     layer_add_child(root, text_layer_get_layer(s_cal_time_layer));
+
+    apply_colors();
 
     time_t now = time(NULL);
     struct tm *t = localtime(&now);
@@ -464,8 +556,19 @@ static void window_unload(Window *window) {
 }
 
 static void init(void) {
+    s_color_bg   = persist_exists(PERSIST_COLOR_BG)
+        ? color_from_hex(persist_read_int(PERSIST_COLOR_BG))   : GColorBlack;
+    s_color_time = persist_exists(PERSIST_COLOR_TIME)
+        ? color_from_hex(persist_read_int(PERSIST_COLOR_TIME)) : GColorWhite;
+    s_color_date = persist_exists(PERSIST_COLOR_DATE)
+        ? color_from_hex(persist_read_int(PERSIST_COLOR_DATE))
+        : PBL_IF_COLOR_ELSE(GColorCadetBlue, GColorWhite);
+    s_color_cal  = persist_exists(PERSIST_COLOR_CAL)
+        ? color_from_hex(persist_read_int(PERSIST_COLOR_CAL))
+        : PBL_IF_COLOR_ELSE(GColorGreen, GColorWhite);
+
     s_main_window = window_create();
-    window_set_background_color(s_main_window, GColorBlack);
+    window_set_background_color(s_main_window, s_color_bg);
     window_set_window_handlers(s_main_window, (WindowHandlers) {
         .load = window_load,
         .unload = window_unload,

@@ -1,7 +1,7 @@
 {
   "name": "agenda-pebble",
-  "author": "YGalanter",
-  "version": "1.4.0",
+  "author": "Comfortably Numb",
+  "version": "1.5.0",
   "keywords": [
     "pebble-app"
   ],
@@ -38,7 +38,11 @@
       "ICS_URL2",
       "ICS_URL3",
       "IS_DAY",
-      "LEADING_ZERO"
+      "LEADING_ZERO",
+      "COLOR_BG",
+      "COLOR_TIME",
+      "COLOR_DATE",
+      "COLOR_CAL"
     ],
     "resources": {
       "media": []
