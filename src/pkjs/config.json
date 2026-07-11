@@ -74,6 +74,82 @@
     ]
   },
   {
+    "type": "section",
+    "capabilities": ["COLOR"],
+    "items": [
+      {
+        "type": "heading",
+        "defaultValue": "Colors"
+      },
+      {
+        "type": "color",
+        "messageKey": "COLOR_BG",
+        "label": "Background",
+        "defaultValue": "000000",
+        "sunlight": true
+      },
+      {
+        "type": "color",
+        "messageKey": "COLOR_TIME",
+        "label": "Time",
+        "defaultValue": "FFFFFF",
+        "sunlight": true
+      },
+      {
+        "type": "color",
+        "messageKey": "COLOR_DATE",
+        "label": "Date",
+        "defaultValue": "55AAAA",
+        "sunlight": true
+      },
+      {
+        "type": "color",
+        "messageKey": "COLOR_CAL",
+        "label": "Calendar event",
+        "defaultValue": "00FF00",
+        "sunlight": true
+      }
+    ]
+  },
+  {
+    "type": "section",
+    "capabilities": ["BW"],
+    "items": [
+      {
+        "type": "heading",
+        "defaultValue": "Colors"
+      },
+      {
+        "type": "color",
+        "messageKey": "COLOR_BG",
+        "label": "Background",
+        "defaultValue": "000000",
+        "layout": [["000000", "FFFFFF"]]
+      },
+      {
+        "type": "color",
+        "messageKey": "COLOR_TIME",
+        "label": "Time",
+        "defaultValue": "FFFFFF",
+        "layout": [["000000", "FFFFFF"]]
+      },
+      {
+        "type": "color",
+        "messageKey": "COLOR_DATE",
+        "label": "Date",
+        "defaultValue": "FFFFFF",
+        "layout": [["000000", "FFFFFF"]]
+      },
+      {
+        "type": "color",
+        "messageKey": "COLOR_CAL",
+        "label": "Calendar event",
+        "defaultValue": "FFFFFF",
+        "layout": [["000000", "FFFFFF"]]
+      }
+    ]
+  },
+  {
     "type": "submit",
     "defaultValue": "Save Settings"
   }

@@ -44,8 +44,34 @@ function getLeadingZero() {
     return localStorage.getItem('leading_zero') === '1' ? 1 : 0;
 }
 
+// Colors are stored as decimal ints (Clay returns them as numbers). Defaults
+// mirror config.json's per-platform defaults; the watch also clamps on B&W.
+function isBWWatch() {
+    if (Pebble.getActiveWatchInfo) {
+        var info = Pebble.getActiveWatchInfo();
+        if (info && info.platform) {
+            return ['aplite', 'diorite', 'flint'].indexOf(info.platform) !== -1;
+        }
+    }
+    return false;
+}
+
+function getColor(key, def) {
+    var raw = localStorage.getItem(key);
+    if (raw === null || raw === '') return def;
+    var val = parseInt(raw, 10);
+    return isNaN(val) ? def : val;
+}
+
 function sendSettings() {
-    sendMsg({ 'LEADING_ZERO': getLeadingZero() });
+    var bw = isBWWatch();
+    sendMsg({
+        'LEADING_ZERO': getLeadingZero(),
+        'COLOR_BG': getColor('color_bg', 0x000000),
+        'COLOR_TIME': getColor('color_time', 0xFFFFFF),
+        'COLOR_DATE': getColor('color_date', bw ? 0xFFFFFF : 0x55AAAA),
+        'COLOR_CAL': getColor('color_cal', bw ? 0xFFFFFF : 0x00FF00)
+    });
 }
 
 function fetchWeather() {
@@ -314,6 +340,10 @@ Pebble.addEventListener('webviewclosed', function (e) {
         localStorage.setItem('ics_url2', flat.ICS_URL2 || '');
         localStorage.setItem('ics_url3', flat.ICS_URL3 || '');
         localStorage.setItem('leading_zero', flat.LEADING_ZERO ? '1' : '0');
+        if (flat.COLOR_BG !== undefined) localStorage.setItem('color_bg', String(parseInt(flat.COLOR_BG, 10)));
+        if (flat.COLOR_TIME !== undefined) localStorage.setItem('color_time', String(parseInt(flat.COLOR_TIME, 10)));
+        if (flat.COLOR_DATE !== undefined) localStorage.setItem('color_date', String(parseInt(flat.COLOR_DATE, 10)));
+        if (flat.COLOR_CAL !== undefined) localStorage.setItem('color_cal', String(parseInt(flat.COLOR_CAL, 10)));
     } catch (ex) {
         console.log('Settings error: ' + ex);
     }
